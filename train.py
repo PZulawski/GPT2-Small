@@ -59,9 +59,13 @@ def main(args):
                 loss /= seq_len
                 accum_loss += loss
                 loss.backward()
-                pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / 10})
                 optim.step()
                 optim.zero_grad()
+
+                pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / min(10, len(train_loss_list) + 1)})
+                if step % args.log_every == 0:
+                    train_loss_list.append(accum_loss.detach().item() / args.log_every)
+                    accum_loss = 0
 
         if args.profile:
             prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
@@ -98,6 +102,7 @@ def parse_args(args: list[str] = None):
     parser = ArgumentParser()
     parser.add_argument('--model', type=str, default='GPT-2', help='Model type')
     parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
+    parser.add_argument('--log_every', type=int, default=10)
 
     args = parser.parse_args(args)
     return args
