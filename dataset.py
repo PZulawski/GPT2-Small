@@ -24,6 +24,7 @@ class TextDataset(Dataset):
     def _chunk_corpus_into_batches(self, data, targets):
         """Chunk the tokenised data into training samples of max_seq_len"""
         n_samples = len(data) // self.max_seq_len
+        print(f'Dataset contains {n_samples} samples of {self.max_seq_len} tokens each')
         self.data_samples = torch.tensor(
             [data[i * self.max_seq_len : (i + 1) * self.max_seq_len] for i in range(n_samples)], 
             dtype=torch.int64,

@@ -3,12 +3,6 @@ from torch import nn
 import numpy as np
 import einops
 
-"""TODO: 
-    -sensible initializations
-    -layer norms DONE
-    -residual connections DONE
-    -positional encodings DONE
-"""
 class Transformer(nn.Module):
     def __init__(self, d_attention, d_qkv, d_ff, vocab_size, n_layers, max_ctx):
         super().__init__()
@@ -28,6 +22,7 @@ class Transformer(nn.Module):
             for _ in range(self.n_layers)
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
+        self.causal_mask = None
 
 
     def forward(self, x):
@@ -43,11 +38,12 @@ class Transformer(nn.Module):
         assert x.shape[1:] == pos_embed.shape
         x = x + pos_embed # bs, seq_len, d_attention
 
-        mask = torch.triu(torch.zeros((seq_len, seq_len)) + (-torch.inf), diagonal=1).to(x.device)
+        if not self.causal_mask:
+            self.causel_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) -torch.inf, diagonal=1).to(x.device)
 
         # transformer layers
         for transformer_block in self.blocks:
-            x = transformer_block(x, mask)
+            x = transformer_block(x, self.causel_mask)
         assert x.shape == (bs, seq_len, self.d_attention)
         
         logits = self.vocab_project(x)

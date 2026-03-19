@@ -2,10 +2,11 @@ import torch
 import yaml
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+from contextlib import nullcontext
 from argparse import ArgumentParser
 from model import Transformer
 from dataset import TextDataset
-from util import get_tokenizer, get_loss_fn
+from util import get_tokenizer, get_loss_fn, get_profiler, get_timestamp
 
 def main(args):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
@@ -29,34 +30,48 @@ def main(args):
         lr=train_config['lr'], 
         betas=(train_config['beta_linear'], train_config['beta_square'])
     )
-    
+
+    prof = get_profiler(args.profile)
     train_loss_list, valid_loss_list = [], []
+    accum_loss = torch.tensor(0., device=device)
     for e in range(train_config['n_epochs']):
         pbar = tqdm(trainloader)
-        for data, targets in pbar:
-            data, targets = data.to(device), targets.to(device)
-            logits = model(data)
+        with prof as prof:
+            for step, (data, targets) in enumerate(pbar):
+                prof.step()
+                if args.profile and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
+                    break
 
-            # Convert class indices to one-hot representation
-            labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
+                data, targets = data.to(device), targets.to(device)
+                logits = model(data)
 
-            # Compute loss for each token in sequence
-            seq_len = logits.shape[1]
-            loss = torch.tensor(0., device=device)
-            for i in range(seq_len):
-                token_logits = logits[:, i, :]
-                token_labels = labels[:, i, :]
-                loss += loss_fn(token_logits, token_labels)
-            
-            loss /= seq_len
-            loss.backward()
-            train_loss_list.append(loss.detach().item())
-            pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / 10})
-            optim.step()
-            optim.zero_grad()
-    
+                # Convert class indices to one-hot representation
+                labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
+
+                # Compute loss for each token in sequence
+                seq_len = logits.shape[1]
+                loss = torch.tensor(0., device=device)
+                for i in range(seq_len):
+                    token_logits = logits[:, i, :]
+                    token_labels = labels[:, i, :]
+                    loss += loss_fn(token_logits, token_labels)
+                
+                loss /= seq_len
+                accum_loss += loss
+                loss.backward()
+                pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / 10})
+                optim.step()
+                optim.zero_grad()
+
+        if args.profile:
+            prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
+            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
+            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
+            break
+
         valid_loss_list.append(validate(model, loss_fn, validloader))
         print(f'For epoch {e} train loss was: {train_loss_list[-1]:.2f} and valid loss was {valid_loss_list[-1]:.2f}')
+    
     return model
 
 def validate(model, loss_fn, validloader: DataLoader):
@@ -82,6 +97,7 @@ def validate(model, loss_fn, validloader: DataLoader):
 def parse_args(args: list[str] = None):
     parser = ArgumentParser()
     parser.add_argument('--model', type=str, default='GPT-2', help='Model type')
+    parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
 
     args = parser.parse_args(args)
     return args
