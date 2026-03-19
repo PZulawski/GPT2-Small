@@ -44,19 +44,7 @@ def main(args):
 
                 data, targets = data.to(device), targets.to(device)
                 logits = model(data)
-
-                # Convert class indices to one-hot representation
-                labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
-
-                # Compute loss for each token in sequence
-                seq_len = logits.shape[1]
-                loss = torch.tensor(0., device=device)
-                for i in range(seq_len):
-                    token_logits = logits[:, i, :]
-                    token_labels = labels[:, i, :]
-                    loss += loss_fn(token_logits, token_labels)
-                
-                loss /= seq_len
+                loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
                 accum_loss += loss
                 loss.backward()
                 optim.step()
@@ -81,21 +69,12 @@ def main(args):
 def validate(model, loss_fn, validloader: DataLoader):
     device = next(model.parameters()).device
     with torch.inference_mode():
-        loss = torch.tensor(0., device=device)
-        total_tokens = 0
         pbar = tqdm(validloader)
         for data, targets in pbar:
             data, targets = data.to(device), targets.to(device)
             logits = model(data)
-            labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
-            # Compute loss for each token in sequence
-            seq_len = logits.shape[1]
-            total_tokens += seq_len
-            for i in range(seq_len):
-                token_logits = logits[:, i, :]
-                token_labels = labels[:, i, :]
-                loss += loss_fn(token_logits, token_labels)
-        return loss / total_tokens
+            loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
+        return loss
 
         
 def parse_args(args: list[str] = None):
