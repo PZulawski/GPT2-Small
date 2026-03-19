@@ -11,5 +11,6 @@ GPT-2:
     lr: 0.001
     beta_linear: 0.9
     beta_square: 0.98
+    weight_decay: 0.0001
     n_epochs: 5
   tokenizer: 'tiktoken'

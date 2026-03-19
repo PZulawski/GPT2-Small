@@ -28,7 +28,8 @@ def main(args):
     optim = torch.optim.Adam(
         model.parameters(), 
         lr=train_config['lr'], 
-        betas=(train_config['beta_linear'], train_config['beta_square'])
+        betas=(train_config['beta_linear'], train_config['beta_square']),
+        weight_decay=train_config['weight_decay'],
     )
 
     prof = get_profiler(args.profile)
