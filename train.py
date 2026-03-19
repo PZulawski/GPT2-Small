@@ -22,8 +22,8 @@ def main(args):
 
     trainset = TextDataset(tokenizer, corpus_name='shakespear_tiny', max_seq_len=model.max_ctx)
     validset = trainset.split_valid_from_train()
-    trainloader = DataLoader(trainset, batch_size=8, shuffle=True)
-    validloader = DataLoader(validset, batch_size=32, shuffle=False)
+    trainloader = DataLoader(trainset, batch_size=train_config['batch_size'], shuffle=True)
+    validloader = DataLoader(validset, batch_size=train_config['batch_size'] * 3, shuffle=False)
 
     optim = torch.optim.Adam(
         model.parameters(), 
