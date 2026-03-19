@@ -1,0 +1,15 @@
+GPT-2:
+  model_config:
+    d_attention: 128
+    d_qkv: 32
+    d_ff: 384
+    n_layers: 4
+    max_ctx: 256
+  train_config:
+    batch_size: 16
+    loss: 'CE'
+    lr: 0.001
+    beta_linear: 0.9
+    beta_square: 0.98
+    n_epochs: 5
+  tokenizer: 'tiktoken'

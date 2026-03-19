@@ -1,0 +1,93 @@
+import torch
+import yaml
+from tqdm import tqdm
+from torch.utils.data import DataLoader
+from argparse import ArgumentParser
+from model import Transformer
+from dataset import TextDataset
+from util import get_tokenizer, get_loss_fn
+
+def main(args):
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    print(f"Running on device: {device}")
+
+    with open('model_defauls.yaml', 'r') as config:
+        config = yaml.unsafe_load(config)
+        train_config = config[args.model]['train_config']
+
+    tokenizer = get_tokenizer(config[args.model]['tokenizer'])
+    model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
+    loss_fn = get_loss_fn(train_config['loss'])
+
+    trainset = TextDataset(tokenizer, corpus_name='shakespear_tiny', max_seq_len=model.max_ctx)
+    validset = trainset.split_valid_from_train()
+    trainloader = DataLoader(trainset, batch_size=8, shuffle=True)
+    validloader = DataLoader(validset, batch_size=32, shuffle=False)
+
+    optim = torch.optim.Adam(
+        model.parameters(), 
+        lr=train_config['lr'], 
+        betas=(train_config['beta_linear'], train_config['beta_square'])
+    )
+    
+    train_loss_list, valid_loss_list = [], []
+    for e in range(train_config['n_epochs']):
+        pbar = tqdm(trainloader)
+        for data, targets in pbar:
+            data, targets = data.to(device), targets.to(device)
+            logits = model(data)
+
+            # Convert class indices to one-hot representation
+            labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
+
+            # Compute loss for each token in sequence
+            seq_len = logits.shape[1]
+            loss = torch.tensor(0., device=device)
+            for i in range(seq_len):
+                token_logits = logits[:, i, :]
+                token_labels = labels[:, i, :]
+                loss += loss_fn(token_logits, token_labels)
+            
+            loss /= seq_len
+            loss.backward()
+            train_loss_list.append(loss.detach().item())
+            pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / 10})
+            optim.step()
+            optim.zero_grad()
+    
+        valid_loss_list.append(validate(model, loss_fn, validloader))
+        print(f'For epoch {e} train loss was: {train_loss_list[-1]:.2f} and valid loss was {valid_loss_list[-1]:.2f}')
+    return model
+
+def validate(model, loss_fn, validloader: DataLoader):
+    device = next(model.parameters()).device
+    with torch.inference_mode():
+        loss = torch.tensor(0., device=device)
+        total_tokens = 0
+        pbar = tqdm(validloader)
+        for data, targets in pbar:
+            data, targets = data.to(device), targets.to(device)
+            logits = model(data)
+            labels = torch.zeros_like(logits).scatter_(2, targets.unsqueeze(2), 1)
+            # Compute loss for each token in sequence
+            seq_len = logits.shape[1]
+            total_tokens += seq_len
+            for i in range(seq_len):
+                token_logits = logits[:, i, :]
+                token_labels = labels[:, i, :]
+                loss += loss_fn(token_logits, token_labels)
+        return loss / total_tokens
+
+        
+def parse_args(args: list[str] = None):
+    parser = ArgumentParser()
+    parser.add_argument('--model', type=str, default='GPT-2', help='Model type')
+
+    args = parser.parse_args(args)
+    return args
+
+if __name__ == '__main__':
+    args = parse_args()
+    main(args)
+
+
