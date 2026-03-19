@@ -12,7 +12,7 @@ def main(args):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Running on device: {device}")
 
-    with open('model_defauls.yaml', 'r') as config:
+    with open('model_defaults.yaml', 'r') as config:
         config = yaml.unsafe_load(config)
         train_config = config[args.model]['train_config']
 
