@@ -1,16 +1,16 @@
 GPT-2:
   model_config:
-    d_attention: 128
-    d_qkv: 32
-    d_ff: 384
-    n_layers: 4
-    max_ctx: 256
+    d_attention: 768
+    d_qkv: 64
+    d_ff: 3072
+    n_layers: 12
+    max_ctx: 512
   train_config:
-    batch_size: 16
+    batch_size: 32
     loss: 'CE'
-    lr: 0.001
+    lr: 0.0006
     beta_linear: 0.9
-    beta_square: 0.98
-    weight_decay: 0.0001
-    n_epochs: 5
+    beta_square: 0.95
+    weight_decay: 0.01
+    n_epochs: 40
   tokenizer: 'tiktoken'
