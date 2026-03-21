@@ -1,6 +1,7 @@
 import torch
 import yaml
 import wandb
+import math
 from config_local import WANDB_API_KEY
 from time import perf_counter
 from tqdm import tqdm
@@ -34,6 +35,13 @@ def main(args):
         weight_decay=train_config['weight_decay'],
     )
 
+    lr_scheduler = CosineDecayScheduler(
+        optim, 
+        lr_max=train_config['lr'],
+        wu_fraction=0.1, 
+        total_steps=len(trainloader) * train_config['n_epochs'] + 1,
+    )
+
     # logging & profiling
     wandb.login(WANDB_API_KEY)
     run = wandb.init(
@@ -56,7 +64,7 @@ def main(args):
                 if args.profile and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
                     break
 
-                loss = train_step(model, optim, global_step, data, targets, device, loss_fn, run)
+                loss = train_step(model, optim, lr_scheduler, global_step, data, targets, device, loss_fn, run)
                 accum_loss += loss
                 train_loss_list.append(loss)
                 pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / min(10, len(train_loss_list) + 1)})
@@ -78,7 +86,7 @@ def main(args):
     return model
 
 
-def train_step(model, optim, step, data, targets, device, loss_fn, run):
+def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
     
     start_time = perf_counter()
     data, targets = data.to(device), targets.to(device)
@@ -99,7 +107,8 @@ def train_step(model, optim, step, data, targets, device, loss_fn, run):
 
     start_time = perf_counter()
     optim.step()
-    run.log({'optim_step_time': perf_counter() - start_time}, step=step)
+    lr_scheduler.step()
+    run.log({'optim_step_time': perf_counter() - start_time, 'lr': lr_scheduler.get_last_lr()[0]}, step=step)
     optim.zero_grad()
 
     return loss
@@ -114,6 +123,31 @@ def validate(model, loss_fn, validloader: DataLoader):
             logits = model(data)
             loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
         return loss
+    
+
+class CosineDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
+    def __init__(self, optim, lr_max, wu_fraction, total_steps, lr_min = 0):
+        self.current_step = 0
+        self.lr_max = lr_max
+        self.wu_fraction = wu_fraction
+        self.total_steps = total_steps
+        self.wu_steps = self.total_steps * self.wu_fraction
+        self.lr_min = (lr_max / 100) if lr_min == 0 else lr_min
+        super().__init__(optim)
+
+    def step(self):
+        self.current_step += 1
+        assert self.current_step <= self.total_steps
+        super().step()
+
+    def get_lr(self):
+        adjusted_scale = (self.lr_max - self.lr_min)
+        if self.current_step <= self.wu_steps:
+            return [(self.current_step / self.wu_steps) * adjusted_scale + self.lr_min]
+        else:
+            adjusted_cosine_step = (self.current_step - self.wu_steps) / (self.total_steps - self.wu_steps)
+            return [math.cos((adjusted_cosine_step) * math.pi / 2) * adjusted_scale + self.lr_min]
+
 
         
 def parse_args(args: list[str] = None):
