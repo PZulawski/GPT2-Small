@@ -22,7 +22,7 @@ class Transformer(nn.Module):
             for _ in range(self.n_layers)
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
-        self.causal_mask = None
+        self.causel_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) -torch.inf, diagonal=1)
 
 
     def forward(self, x):
@@ -38,8 +38,9 @@ class Transformer(nn.Module):
         assert x.shape[1:] == pos_embed.shape
         x = x + pos_embed # bs, seq_len, d_attention
 
-        if not self.causal_mask:
-            self.causel_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) -torch.inf, diagonal=1).to(x.device)
+        if self.causel_mask.device != x.device:
+            self.causel_mask = self.causel_mask.to(x.device)
+        assert self.causel_mask.shape[0] == seq_len
 
         # transformer layers
         for transformer_block in self.blocks:
