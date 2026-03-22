@@ -88,9 +88,9 @@ def main(args):
 
 def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
     
-    start_time = perf_counter()
+    start_time_step = perf_counter()
     data, targets = data.to(device), targets.to(device)
-    run.log({'data_load_time': perf_counter() - start_time}, step=step)
+    run.log({'data_load_time': perf_counter() - start_time_step}, step=step)
 
     start_time = perf_counter()
     logits = model(data)
@@ -108,7 +108,14 @@ def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn,
     start_time = perf_counter()
     optim.step()
     lr_scheduler.step()
-    run.log({'optim_step_time': perf_counter() - start_time, 'lr': lr_scheduler.get_last_lr()[0]}, step=step)
+    run.log(
+        {
+            'optim_step_time': perf_counter() - start_time, 
+            'lr': lr_scheduler.get_last_lr()[0],
+            'token_throughput': data.shape[0] * data.shape[1] / (perf_counter() - start_time_step),
+        }, 
+        step=step,
+    )
     optim.zero_grad()
 
     return loss
