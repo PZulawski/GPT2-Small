@@ -6,7 +6,7 @@ GPT-2:
     n_layers: 12
     max_ctx: 512
   train_config:
-    batch_size: 32
+    batch_size: 8
     loss: 'CE'
     lr: 0.0006
     beta_linear: 0.9

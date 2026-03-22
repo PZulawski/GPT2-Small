@@ -63,52 +63,50 @@ class TransformerBlock(nn.Module):
         x = self.feed_forward_block(x)
 
         return x
-
-class AttentionHead(nn.Module):
-    def __init__(self, d_attention, d_qkv):
-        super().__init__()
-        self.Wq = nn.Linear(d_attention, d_qkv, bias=False)
-        self.Wk = nn.Linear(d_attention, d_qkv, bias=False)
-        self.Wv = nn.Linear(d_attention, d_qkv, bias=False)
-
-    def forward(self, x, mask):
-        """
-        x: bs, seq_len, d_attention
-        """
-        q = self.Wq(x) # bs, seq_len, d_qkv
-        k = self.Wk(x) # bs, seq_len, d_qkv
-        v = self.Wv(x) # bs, seq_len, d_qkv
-
-        bs, seq_len, d_qkv = q.shape
-        # dot producst of q's and k's, scaled to retain unitary variance
-        atten_dot_prods = einops.einsum(q, k, 'bs seq_q d_qkv, bs seq_k d_qkv -> bs seq_q seq_k') / np.sqrt(d_qkv)
-        # causal masking, sets dot products for future tokens to -inf
-        atten_dot_prods += mask
-        atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2)
-        post_attn_embeds = einops.einsum(v, atten_coefs, 'bs seq_k d_qkv, bs seq_q seq_k -> bs seq_q d_qkv')
-        
-        return post_attn_embeds
     
 class AttentionBlock(nn.Module):
     def __init__(self, d_attention, d_qkv, n_heads):
         super().__init__()
-        self.heads = nn.ModuleList(AttentionHead(d_attention, d_qkv) for _ in range(n_heads))
         self.Wo = nn.Linear(d_attention, d_attention)
         self.layern_norm = nn.LayerNorm(d_attention)
+        self.Wq = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
+        self.Wk = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
+        self.Wv = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
+        self.d_qkv = d_qkv
+        self.n_heads = n_heads
 
     def forward(self, x, mask):
         """
         x: batch, seq_len, d_atten
         """
         x_res = x
-        x = self.layern_norm(x)
-
-        x_heads = [head(x, mask) for head in self.heads]
+        x = self.layern_norm(x) # bs, seq_len, d_atten
+        bs, seq_len, d_atten = x.shape 
         
-        x_concat_heads = torch.cat(x_heads, dim=2)
-        assert x_concat_heads.shape[-1] == next(self.Wo.parameters()).shape[0], 'concat heads do not add up to d_attention'
+        q_cat = self.Wq(x) # bs, seq_len, n_head * d_qkv
+        k_cat = self.Wk(x) # bs, seq_len, n_head * d_qkv
+        v_cat = self.Wv(x) # bs, seq_len, n_head * d_qkv
 
-        return self.Wo(x_concat_heads) + x_res
+        atten_dot_prods = einops.einsum(
+            einops.rearrange(q_cat, 'bs seq_len (n_heads d_qkv) -> bs seq_len n_heads d_qkv', n_heads=self.n_heads),
+            einops.rearrange(k_cat, 'bs seq_len (n_heads d_qkv) -> bs seq_len n_heads d_qkv', n_heads=self.n_heads),
+            'bs seq_q n_heads d_qkv, bs seq_k n_heads d_qkv -> bs seq_q seq_k n_heads'
+        ) / np.sqrt(self.d_qkv) # bs, seq_q, seq_k, n_heads
+
+        mask_cat = torch.stack([mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
+        atten_dot_prods += mask_cat
+
+        atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2) # bs, seq_q, seq_k, n_heads
+
+        v = einops.rearrange(v_cat, 'bs seq_v (n_heads d_qkv) -> bs seq_v n_heads d_qkv', n_heads=self.n_heads)
+
+        post_atten_embeds = einops.einsum(
+            v,
+            atten_coefs,
+            'bs seq_k n_heads d_qkv, bs seq_q seq_k n_heads -> bs seq_q d_qkv n_heads'
+        )
+
+        return self.Wo(einops.rearrange(post_atten_embeds, 'bs seq d_qkv n_heads -> bs seq (d_qkv n_heads)')) + x_res
         
 
 class FeedForwardBlock(nn.Module):
