@@ -22,7 +22,7 @@ class Transformer(nn.Module):
             for _ in range(self.n_layers)
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
-        self.causel_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) -torch.inf, diagonal=1)
+        self.causel_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) - torch.inf, diagonal=1)
 
 
     def forward(self, x):
