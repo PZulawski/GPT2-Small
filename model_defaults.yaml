@@ -13,4 +13,5 @@ GPT-2:
     beta_square: 0.95
     weight_decay: 0.01
     n_epochs: 40
+    wu_fraction: 0.03
   tokenizer: 'tiktoken'
