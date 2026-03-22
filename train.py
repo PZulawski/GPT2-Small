@@ -38,7 +38,7 @@ def main(args):
     lr_scheduler = CosineDecayScheduler(
         optim, 
         lr_max=train_config['lr'],
-        wu_fraction=0.1, 
+        wu_fraction=train_config['wu_fraction'], 
         total_steps=len(trainloader) * train_config['n_epochs'] + 1,
     )
 
