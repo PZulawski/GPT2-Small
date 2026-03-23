@@ -70,9 +70,7 @@ class AttentionBlock(nn.Module):
         super().__init__()
         self.Wo = nn.Linear(d_attention, d_attention)
         self.layern_norm = nn.LayerNorm(d_attention)
-        self.Wq = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
-        self.Wk = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
-        self.Wv = nn.Linear(d_attention, n_heads * d_qkv, bias=False)
+        self.Wqkv = nn.Linear(d_attention, n_heads * d_qkv * 3, bias=False)
         self.d_qkv = d_qkv
         self.n_heads = n_heads
 
@@ -82,11 +80,13 @@ class AttentionBlock(nn.Module):
         """
         x_res = x
         x = self.layern_norm(x) # bs, seq_len, d_atten
-        bs, seq_len, d_atten = x.shape 
-        
-        q_cat = self.Wq(x) # bs, seq_len, n_head * d_qkv
-        k_cat = self.Wk(x) # bs, seq_len, n_head * d_qkv
-        v_cat = self.Wv(x) # bs, seq_len, n_head * d_qkv
+
+        qkv_cat = self.Wqkv(x) # bs, seq_len, n_head * d_qkv * 3
+
+        cat_head_width = self.n_heads * self.d_qkv
+        q_cat = qkv_cat[..., : cat_head_width]                          # bs, seq_len, n_head * d_qkv
+        k_cat = qkv_cat[..., cat_head_width : 2 * cat_head_width]       # bs, seq_len, n_head * d_qkv
+        v_cat = qkv_cat[..., 2 * cat_head_width : 3 * cat_head_width]   # bs, seq_len, n_head * d_qkv
 
         atten_dot_prods = einops.einsum(
             einops.rearrange(q_cat, 'bs seq_len (n_heads d_qkv) -> bs seq_len n_heads d_qkv', n_heads=self.n_heads),
@@ -99,10 +99,8 @@ class AttentionBlock(nn.Module):
 
         atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2) # bs, seq_q, seq_k, n_heads
 
-        v = einops.rearrange(v_cat, 'bs seq_v (n_heads d_qkv) -> bs seq_v n_heads d_qkv', n_heads=self.n_heads)
-
         post_atten_embeds = einops.einsum(
-            v,
+            einops.rearrange(v_cat, 'bs seq_v (n_heads d_qkv) -> bs seq_v n_heads d_qkv', n_heads=self.n_heads),
             atten_coefs,
             'bs seq_k n_heads d_qkv, bs seq_q seq_k n_heads -> bs seq_q d_qkv n_heads'
         )
