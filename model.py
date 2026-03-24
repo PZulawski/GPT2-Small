@@ -14,6 +14,7 @@ class Transformer(nn.Module):
         self.n_heads = self.d_attention // self.d_qkv
         self.n_layers = n_layers
         self.vocab_size = vocab_size
+        self.is_inference = False
 
         self.embeds = nn.Embedding(self.vocab_size, self.d_attention)
         self.pos_embeds = nn.Embedding(self.max_ctx, self.d_attention)
@@ -40,11 +41,12 @@ class Transformer(nn.Module):
 
         if self.causal_mask.device != x.device:
             self.causal_mask = self.causal_mask.to(x.device)
-        assert self.causal_mask.shape[0] == seq_len
+        
+        # assert self.causal_mask.shape[0] == seq_len
 
         # transformer layers
         for transformer_block in self.blocks:
-            x = transformer_block(x, self.causal_mask)
+            x = transformer_block(x, self.causal_mask, self.is_inference)
         assert x.shape == (bs, seq_len, self.d_attention)
         
         logits = self.vocab_project(x)
@@ -59,8 +61,8 @@ class TransformerBlock(nn.Module):
         self.attention_block = AttentionBlock(d_attention, d_qkv, n_heads)
         self.feed_forward_block = FeedForwardBlock(d_attention, d_ff)
 
-    def forward(self, x, mask):
-        x = self.attention_block(x, mask)
+    def forward(self, x, mask, is_inference):
+        x = self.attention_block(x, mask, is_inference)
         x = self.feed_forward_block(x)
 
         return x
@@ -74,7 +76,7 @@ class AttentionBlock(nn.Module):
         self.d_qkv = d_qkv
         self.n_heads = n_heads
 
-    def forward(self, x, mask):
+    def forward(self, x, mask, is_inference):
         """
         x: batch, seq_len, d_atten
         """
@@ -94,8 +96,9 @@ class AttentionBlock(nn.Module):
             'bs seq_q n_heads d_qkv, bs seq_k n_heads d_qkv -> bs seq_q seq_k n_heads'
         ) / np.sqrt(self.d_qkv) # bs, seq_q, seq_k, n_heads
 
-        mask_cat = torch.stack([mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
-        atten_dot_prods += mask_cat
+        if not is_inference:
+            mask_cat = torch.stack([mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
+            atten_dot_prods += mask_cat
 
         atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2) # bs, seq_q, seq_k, n_heads
 
