@@ -54,6 +54,8 @@ def main(args):
     )
     prof = get_profiler(args.profile)
 
+    scaler = torch.GradScaler()
+
     global_step = 0
     for e in range(train_config['n_epochs']):
         accum_loss = torch.tensor(0., device=device)
@@ -65,7 +67,8 @@ def main(args):
                 if args.profile and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
                     break
 
-                loss = train_step(model, optim, lr_scheduler, global_step, data, targets, device, loss_fn, run)
+                with torch.autocast(device_type=device.type):
+                    loss = train_step(model, optim, scaler, lr_scheduler, global_step, data, targets, device, loss_fn, run)
                 accum_loss += loss
                 pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
 
@@ -83,7 +86,7 @@ def main(args):
     return model
 
 
-def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
+def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, loss_fn, run):
     
     start_time_step = perf_counter()
     data, targets = data.to(device), targets.to(device)
@@ -99,11 +102,12 @@ def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn,
     run.log({'loss': loss}, step=step)
 
     start_time = perf_counter()
-    loss.backward()
+    scaler.scale(loss).backward()
     run.log({'model_backward_time': perf_counter() - start_time}, step=step)
 
     start_time = perf_counter()
-    optim.step()
+    scaler.step(optim)
+    scaler.update()
     lr_scheduler.step()
     run.log(
         {
