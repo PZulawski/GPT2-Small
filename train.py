@@ -54,10 +54,9 @@ def main(args):
     )
     prof = get_profiler(args.profile)
 
-    train_loss_list = []
     global_step = 0
-    accum_loss = torch.tensor(0., device=device)
     for e in range(train_config['n_epochs']):
+        accum_loss = torch.tensor(0., device=device)
         pbar = tqdm(trainloader)
         with prof as prof:
             for step, (data, targets) in enumerate(pbar):
@@ -68,11 +67,7 @@ def main(args):
 
                 loss = train_step(model, optim, lr_scheduler, global_step, data, targets, device, loss_fn, run)
                 accum_loss += loss
-                train_loss_list.append(loss)
-                pbar.set_postfix({'epoch': e, 'loss': sum(train_loss_list[-10:]) / min(10, len(train_loss_list) + 1)})
-                if step % args.log_every == 0:
-                    train_loss_list.append(accum_loss.detach().item() / args.log_every)
-                    accum_loss = 0
+                pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
 
         if args.profile:
             prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
@@ -82,7 +77,7 @@ def main(args):
 
         valid_loss = validate(model, loss_fn, validloader)
         run.log({'valid_loss': valid_loss}, step=global_step)
-        print(f'For epoch {e} train loss was: {train_loss_list[-1]:.2f} and valid loss was {valid_loss:.2f}')
+        print(f'For epoch {e} valid loss was {valid_loss:.2f}')
     
     run.finish()
     return model
@@ -118,6 +113,10 @@ def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn,
         }, 
         step=step,
     )
+
+    if step % args.log_every == 0 and args.log_acts_and_grads:
+        log_acts_and_grads(run, model, step)
+
     optim.zero_grad()
 
     return loss
@@ -133,6 +132,10 @@ def validate(model, loss_fn, validloader: DataLoader):
             loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
         return loss
     
+
+def log_acts_and_grads(run, model, step):
+    run.log({f"weight_max/{name}": torch.max(params).item() for name, params in model.state_dict().items()}, step=step)
+    run.log({f"grad_max/{name}": torch.max(params.grad).item() for name, params in model.named_parameters()}, step=step)
 
 class CosineDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
     def __init__(self, optim, lr_max, wu_fraction, total_steps, lr_min = 0):
@@ -157,8 +160,7 @@ class CosineDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
             adjusted_cosine_step = (self.current_step - self.wu_steps) / (self.total_steps - self.wu_steps)
             return [math.cos((adjusted_cosine_step) * math.pi / 2) * adjusted_scale + self.lr_min]
 
-
-        
+      
 def parse_args(args: list[str] = None):
     parser = ArgumentParser()
     parser.add_argument('--model', type=str, default='GPT-2', help='Model type')
@@ -166,6 +168,7 @@ def parse_args(args: list[str] = None):
     parser.add_argument('--log_every', type=int, default=10)
     parser.add_argument('--run_name')
     parser.add_argument('--fixed_seed', action='store_true')
+    parser.add_argument('--log_acts_and_grads', action='store_true')
 
     args = parser.parse_args(args)
     return args
