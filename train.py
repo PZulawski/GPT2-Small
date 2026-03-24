@@ -120,8 +120,9 @@ def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn,
     optim.zero_grad()
 
     return loss
+    
 
-
+@torch.inference_mode()
 def validate(model, loss_fn, validloader: DataLoader):
     device = next(model.parameters()).device
     with torch.inference_mode():
