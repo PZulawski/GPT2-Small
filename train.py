@@ -20,6 +20,8 @@ def main(args):
         train_config = config[args.model]['train_config']
 
     tokenizer = get_tokenizer(config[args.model]['tokenizer'])
+    if args.fixed_seed:
+        torch.manual_seed(42)
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
     loss_fn = get_loss_fn(train_config['loss'])
 
@@ -163,6 +165,7 @@ def parse_args(args: list[str] = None):
     parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
     parser.add_argument('--log_every', type=int, default=10)
     parser.add_argument('--run_name')
+    parser.add_argument('--fixed_seed', action='store_true')
 
     args = parser.parse_args(args)
     return args
