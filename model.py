@@ -24,6 +24,7 @@ class Transformer(nn.Module):
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
         self.causal_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) - torch.inf, diagonal=1)
+        self.causal_mask = torch.stack([self.causal_mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
 
 
     def forward(self, x):
@@ -97,8 +98,7 @@ class AttentionBlock(nn.Module):
         ) / np.sqrt(self.d_qkv) # bs, seq_q, seq_k, n_heads
 
         if not is_inference:
-            mask_cat = torch.stack([mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
-            atten_dot_prods += mask_cat
+            atten_dot_prods += mask
 
         atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2) # bs, seq_q, seq_k, n_heads
 
