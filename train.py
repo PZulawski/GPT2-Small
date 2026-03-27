@@ -15,37 +15,44 @@ def main(args):
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     print(f"Running on device: {device}")
 
+    # load model and training run parameters
     with open('model_defaults.yaml', 'r') as config:
         config = yaml.unsafe_load(config)
         train_config = config[args.model]['train_config']
 
     tokenizer = get_tokenizer(config[args.model]['tokenizer'])
-    if args.fixed_seed:
+
+    # fix torch seed to limit noise impact on reproducibility 
+    if args.fixed_seed: 
         torch.manual_seed(42)
+    
+    # init model and loss
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
     model.compile()
     loss_fn = get_loss_fn(train_config['loss'])
 
-    trainset = TextDataset(tokenizer, corpus_name='shakespear_tiny', max_seq_len=model.max_ctx)
+    # init data loading utilities
+    trainset = TextDataset(tokenizer, corpus_name=args.corpus_name, max_seq_len=model.max_ctx)
     validset = trainset.split_valid_from_train()
     trainloader = DataLoader(trainset, batch_size=train_config['batch_size'], shuffle=True)
     validloader = DataLoader(validset, batch_size=train_config['batch_size'] * 3, shuffle=False)
 
+    # init optimisation utilities
     optim = torch.optim.Adam(
         model.parameters(), 
         lr=train_config['lr'], 
         betas=(train_config['beta_linear'], train_config['beta_square']),
         weight_decay=train_config['weight_decay'],
     )
-
     lr_scheduler = CosineDecayScheduler(
         optim, 
         lr_max=train_config['lr'],
         wu_fraction=train_config['wu_fraction'], 
         total_steps=len(trainloader) * train_config['n_epochs'] + 1,
     )
+    scaler = torch.GradScaler()
 
-    # logging & profiling
+    # init logging & profiling
     wandb.login(WANDB_API_KEY)
     run = wandb.init(
         name=args.run_name, 
@@ -54,8 +61,6 @@ def main(args):
         config=train_config,
     )
     prof = get_profiler(args.profile)
-
-    scaler = torch.GradScaler()
 
     global_step = 0
     for e in range(train_config['n_epochs']):
@@ -70,6 +75,7 @@ def main(args):
 
                 with torch.autocast(device_type=device.type):
                     loss = train_step(model, optim, scaler, lr_scheduler, global_step, data, targets, device, loss_fn, run)
+
                 accum_loss += loss
                 pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
 
@@ -88,6 +94,7 @@ def main(args):
 
 
 def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, loss_fn, run):
+    """Executes a single training step, records and logs telemetry to W&B"""
     
     start_time_step = perf_counter()
     data, targets = data.to(device), targets.to(device)
@@ -121,7 +128,6 @@ def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, 
 
     if step % args.log_every == 0 and args.log_acts_and_grads:
         log_acts_and_grads(run, model, step)
-
     optim.zero_grad()
 
     return loss
@@ -130,13 +136,12 @@ def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, 
 @torch.inference_mode()
 def validate(model, loss_fn, validloader: DataLoader):
     device = next(model.parameters()).device
-    with torch.inference_mode():
-        pbar = tqdm(validloader)
-        for data, targets in pbar:
-            data, targets = data.to(device), targets.to(device)
-            logits = model(data)
-            loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
-        return loss
+    pbar = tqdm(validloader)
+    for data, targets in pbar:
+        data, targets = data.to(device), targets.to(device)
+        logits = model(data)
+        loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
+    return loss
     
 
 def log_acts_and_grads(run, model, step):
@@ -144,6 +149,11 @@ def log_acts_and_grads(run, model, step):
     run.log({f"grad_max/{name}": torch.max(params.grad).item() for name, params in model.named_parameters()}, step=step)
 
 class CosineDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
+    """
+    Cosine decay schduler, ramps up linearly from lr_min to lr_max over wu_fraction of total_steps, then 
+    follows a cosine curve from lr_max back down to lr_min
+    """
+
     def __init__(self, optim, lr_max, wu_fraction, total_steps, lr_min = 0):
         self.current_step = 0
         self.lr_max = lr_max
@@ -169,12 +179,19 @@ class CosineDecayScheduler(torch.optim.lr_scheduler.LRScheduler):
       
 def parse_args(args: list[str] = None):
     parser = ArgumentParser()
-    parser.add_argument('--model', type=str, default='GPT-2', help='Model type')
+    parser.add_argument('--model', type=str, default='GPT-2', help='Model type, picks params from model_defaults.yaml')
+    parser.add_argument(
+        '--corpus_name', 
+        type=str, 
+        choices=['shakespear_tiny'],
+        default='shakespear_tiny', 
+        help='Name of training corpus',
+    )
     parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
-    parser.add_argument('--log_every', type=int, default=10)
-    parser.add_argument('--run_name')
-    parser.add_argument('--fixed_seed', action='store_true')
-    parser.add_argument('--log_acts_and_grads', action='store_true')
+    parser.add_argument('--log_every', type=int, default=10, help='Number of steps between logging')
+    parser.add_argument('--run_name', type=str, help='Name of the run for W&B logging')
+    parser.add_argument('--fixed_seed', action='store_true', help='Set to reduce variance in profiling reproducibility')
+    parser.add_argument('--log_acts_and_grads', action='store_true', help='Set to log activation and grad max to W&B')
 
     args = parser.parse_args(args)
     return args

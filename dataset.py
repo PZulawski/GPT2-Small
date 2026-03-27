@@ -71,6 +71,7 @@ class TextDataset(Dataset):
         eot = '<|endoftext|>'
         eot_id = self.tokenizer.encode(eot, allowed_special={'<|endoftext|>'})
 
+        # start input with eot token to create offset by one 
         input = eot_id.copy()
         target = []
         with open(corpus_path) as r_h:

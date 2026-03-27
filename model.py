@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-import numpy as np
+import math
 import einops
 
 class Transformer(nn.Module):
@@ -23,8 +23,12 @@ class Transformer(nn.Module):
             for _ in range(self.n_layers)
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
-        self.causal_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) - torch.inf, diagonal=1)
-        self.causal_mask = torch.stack([self.causal_mask for _ in range(self.n_heads)], dim=-1) # seq_q, seq_k -> seq_q, seq_k, n_heads
+        
+        causal_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) - torch.inf, diagonal=1)
+        causal_mask = torch.stack(
+            [causal_mask for _ in range(self.n_heads)],
+            dim=-1) 
+        self.register_buffer('causal_mask', causal_mask) # seq_q, seq_k -> seq_q, seq_k, n_heads
 
 
     def forward(self, x):
@@ -32,24 +36,26 @@ class Transformer(nn.Module):
         in: list of token id's 
         """
         bs, seq_len = x.shape
+
         # embed the input
         x = self.embeds(x) # bs, seq_len, d_attention
+
         # get position embeds and add to input
         assert seq_len <= self.max_ctx
         pos_embed = self.pos_embeds(torch.arange(seq_len).to(x.device))
         assert x.shape[1:] == pos_embed.shape
         x = x + pos_embed # bs, seq_len, d_attention
 
+        # send mask to device
         if self.causal_mask.device != x.device:
             self.causal_mask = self.causal_mask.to(x.device)
         
-        # assert self.causal_mask.shape[0] == seq_len
-
-        # transformer layers
+        # loop sequentially through transformer layers
         for transformer_block in self.blocks:
             x = transformer_block(x, self.causal_mask, self.is_inference)
         assert x.shape == (bs, seq_len, self.d_attention)
         
+        # project final embeddings to comput logits over full vocab
         logits = self.vocab_project(x)
         assert logits.shape == (bs, seq_len, self.vocab_size)
 
@@ -63,6 +69,7 @@ class TransformerBlock(nn.Module):
         self.feed_forward_block = FeedForwardBlock(d_attention, d_ff)
 
     def forward(self, x, mask, is_inference):
+        # process embeddings through attention and feed-forward/MLP layers sequentially
         x = self.attention_block(x, mask, is_inference)
         x = self.feed_forward_block(x)
 
@@ -79,29 +86,34 @@ class AttentionBlock(nn.Module):
 
     def forward(self, x, mask, is_inference):
         """
+        Uses fused multi-head attention; Wqkv is the fused Q, K and V martrix 
         x: batch, seq_len, d_atten
         """
-        x_res = x
+        x_res = x               # bs, seq_len, d_atten
         x = self.layern_norm(x) # bs, seq_len, d_atten
 
-        qkv_cat = self.Wqkv(x) # bs, seq_len, n_head * d_qkv * 3
+        qkv_cat = self.Wqkv(x)  # bs, seq_len, n_head * d_qkv * 3
 
+        # split the result of fused projection into individual head types
         cat_head_width = self.n_heads * self.d_qkv
         q_cat = qkv_cat[..., : cat_head_width]                          # bs, seq_len, n_head * d_qkv
         k_cat = qkv_cat[..., cat_head_width : 2 * cat_head_width]       # bs, seq_len, n_head * d_qkv
         v_cat = qkv_cat[..., 2 * cat_head_width : 3 * cat_head_width]   # bs, seq_len, n_head * d_qkv
 
+        # compute querry-key dot products, scaled by sqrt(self.d_qkv) to retain unit variance
         atten_dot_prods = einops.einsum(
             einops.rearrange(q_cat, 'bs seq_len (n_heads d_qkv) -> bs seq_len n_heads d_qkv', n_heads=self.n_heads),
             einops.rearrange(k_cat, 'bs seq_len (n_heads d_qkv) -> bs seq_len n_heads d_qkv', n_heads=self.n_heads),
             'bs seq_q n_heads d_qkv, bs seq_k n_heads d_qkv -> bs seq_q seq_k n_heads'
-        ) / np.sqrt(self.d_qkv) # bs, seq_q, seq_k, n_heads
+        ) / math.sqrt(self.d_qkv) # bs, seq_q, seq_k, n_heads
 
+        # skip masking at inference
         if not is_inference:
             atten_dot_prods += mask
 
         atten_coefs = nn.functional.softmax(atten_dot_prods, dim=2) # bs, seq_q, seq_k, n_heads
 
+        # compute output embeddings as a weighted sum of input embeddings  
         post_atten_embeds = einops.einsum(
             einops.rearrange(v_cat, 'bs seq_v (n_heads d_qkv) -> bs seq_v n_heads d_qkv', n_heads=self.n_heads),
             atten_coefs,
@@ -123,11 +135,11 @@ class FeedForwardBlock(nn.Module):
         in: (bs, seq_len, d_attention)
         out: (bs, seq_len, d_attention)
         """
-        x_res = x
-        x = self.layer_norm(x)
+        x_res = x                   # bs, seq_len, d_atten
+        x = self.layer_norm(x)      # bs, seq_len, d_atten
 
-        x = self.Wup(x)
-        x = nn.functional.relu(x)
-        x = self.Wdp(x)
+        x = self.Wup(x)             # bs, seq_len, d_ff
+        x = nn.functional.relu(x)   # bs, seq_len, d_ff
+        x = self.Wdp(x)             # bs, seq_len, d_atten
 
         return x + x_res
