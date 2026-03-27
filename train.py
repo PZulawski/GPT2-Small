@@ -23,6 +23,7 @@ def main(args):
     if args.fixed_seed:
         torch.manual_seed(42)
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
+    model.compile()
     loss_fn = get_loss_fn(train_config['loss'])
 
     trainset = TextDataset(tokenizer, corpus_name='shakespear_tiny', max_seq_len=model.max_ctx)
