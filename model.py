@@ -47,10 +47,6 @@ class Transformer(nn.Module):
         pos_embed = self.pos_embeds(self.pos_embed_range[:seq_len])
         assert x.shape[1:] == pos_embed.shape
         x = x + pos_embed # bs, seq_len, d_attention
-
-        # send mask to device
-        if self.causal_mask.device != x.device:
-            self.causal_mask = self.causal_mask.to(x.device)
         
         # loop sequentially through transformer layers
         for transformer_block in self.blocks:
