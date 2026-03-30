@@ -54,8 +54,7 @@ def main(args):
         lr_max=train_config['lr'],
         wu_fraction=train_config['wu_fraction'], 
         total_steps=len(trainloader) * train_config['n_epochs'] + 1,
-    )
-    scaler = torch.GradScaler()
+    )    
 
     # init logging & profiling
     wandb.login(WANDB_API_KEY)
@@ -78,8 +77,8 @@ def main(args):
                 if args.profile and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
                     break
 
-                with torch.autocast(device_type=device.type):
-                    loss = train_step(model, optim, scaler, lr_scheduler, global_step, data, targets, device, loss_fn, run)
+                with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+                    loss = train_step(model, optim, lr_scheduler, global_step, data, targets, device, loss_fn, run)
 
                 accum_loss += loss
                 pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
@@ -98,7 +97,7 @@ def main(args):
     return model
 
 
-def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, loss_fn, run):
+def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
     """Executes a single training step, records and logs telemetry to W&B"""
     
     start_time_step = perf_counter()
@@ -115,12 +114,11 @@ def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, 
     run.log({'loss': loss}, step=step)
 
     start_time = perf_counter()
-    scaler.scale(loss).backward()
+    loss.backward()
     run.log({'model_backward_time': perf_counter() - start_time}, step=step)
 
     start_time = perf_counter()
-    scaler.step(optim)
-    scaler.update()
+    optim.step()
     lr_scheduler.step()
     run.log(
         {
