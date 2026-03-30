@@ -142,11 +142,12 @@ def train_step(model, optim, scaler, lr_scheduler, step, data, targets, device, 
 def validate(model, loss_fn, validloader: DataLoader):
     device = next(model.parameters()).device
     pbar = tqdm(validloader)
-    for data, targets in pbar:
+    total_loss = 0
+    for i, (data, targets) in enumerate(pbar):
         data, targets = data.to(device), targets.to(device)
         logits = model(data)
-        loss = loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean')
-    return loss
+        total_loss += loss_fn(logits.flatten(0, 1), targets.flatten(0, 1), reduction='mean').item()
+    return total_loss / (i + 1)
     
 
 def log_acts_and_grads(run, model, step):
