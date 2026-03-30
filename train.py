@@ -2,6 +2,7 @@ import torch
 import yaml
 import wandb
 import math
+import gc
 from config_local import WANDB_API_KEY
 from time import perf_counter
 from tqdm import tqdm
@@ -25,6 +26,7 @@ def main(args):
     # fix torch seed to limit noise impact on reproducibility 
     if args.fixed_seed: 
         torch.manual_seed(42)
+        gc.disable()
     
     # init model and loss
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
