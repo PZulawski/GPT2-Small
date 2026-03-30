@@ -48,6 +48,7 @@ def main(args):
         lr=train_config['lr'], 
         betas=(train_config['beta_linear'], train_config['beta_square']),
         weight_decay=train_config['weight_decay'],
+        fused=True,
     )
     lr_scheduler = CosineDecayScheduler(
         optim, 
