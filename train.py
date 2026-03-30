@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from argparse import ArgumentParser
 from model import Transformer
 from dataset import TextDataset
+from dataloader import PrefetchDataLoader
 from util import get_tokenizer, get_loss_fn, get_profiler, get_timestamp
 
 def main(args):
@@ -38,6 +39,8 @@ def main(args):
     validset = trainset.split_valid_from_train()
     trainloader = DataLoader(trainset, batch_size=train_config['batch_size'], shuffle=True)
     validloader = DataLoader(validset, batch_size=train_config['batch_size'] * 3, shuffle=False)
+    if args.prefetch_data:
+        trainloader = PrefetchDataLoader(trainloader, device)
 
     # init optimisation utilities
     optim = torch.optim.Adam(
@@ -189,6 +192,7 @@ def parse_args(args: list[str] = None):
         default='shakespear_tiny', 
         help='Name of training corpus',
     )
+    parser.add_argument('--prefetch_data', action='store_true')
     parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
     parser.add_argument('--log_every', type=int, default=10, help='Number of steps between logging')
     parser.add_argument('--run_name', type=str, help='Name of the run for W&B logging')
