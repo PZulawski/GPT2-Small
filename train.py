@@ -31,8 +31,8 @@ def main(args):
     
     # init model and loss
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
-    model.compile()
-    loss_fn = get_loss_fn(train_config['loss'])
+    model.compile(fullgraph=True, mode='reduce-overhead')
+    loss_fn = torch.compile(get_loss_fn(train_config['loss']), fullgraph=True, mode='reduce-overhead')
 
     # init data loading utilities
     trainset = TextDataset(tokenizer, corpus_name=args.corpus_name, max_seq_len=model.max_ctx)
