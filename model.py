@@ -30,6 +30,8 @@ class Transformer(nn.Module):
             dim=-1) 
         self.register_buffer('causal_mask', causal_mask) # seq_q, seq_k -> seq_q, seq_k, n_heads
 
+        pos_embed_range = torch.arange(self.max_ctx)
+        self.register_buffer('pos_embed_range', pos_embed_range)
 
     def forward(self, x):
         """
@@ -42,7 +44,7 @@ class Transformer(nn.Module):
 
         # get position embeds and add to input
         assert seq_len <= self.max_ctx
-        pos_embed = self.pos_embeds(torch.arange(seq_len).to(x.device))
+        pos_embed = self.pos_embeds(self.pos_embed_range[:seq_len])
         assert x.shape[1:] == pos_embed.shape
         x = x + pos_embed # bs, seq_len, d_attention
 
