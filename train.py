@@ -1,3 +1,4 @@
+import os
 import torch
 import yaml
 import math
@@ -99,7 +100,7 @@ def train(rank, world_size, args):
             for step, (data, targets) in enumerate(pbar):
                 prof.step()
                 global_step += 1
-                if args.profile and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
+                if args.profile == 'pytorch' and prof.schedule(step) == torch.profiler.ProfilerAction.NONE:
                     break
 
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
@@ -230,7 +231,13 @@ def parse_args(args: list[str] = None):
         help='Name of training corpus',
     )
     parser.add_argument('--prefetch_data', action='store_true')
-    parser.add_argument('--profile', action='store_true', help='Torch-profile training steps')
+    parser.add_argument(
+        '--profile', 
+        type=str, 
+        choices=['nsys', 'pytorch', 'none'], 
+        default='none', 
+        help='Type of profiler to be used; nsys, pytorch or none (default)'
+    )
     parser.add_argument('--log_every', type=int, default=10, help='Number of steps between logging')
     parser.add_argument('--run_name', type=str, help='Name of the run for W&B logging')
     parser.add_argument('--fixed_seed', action='store_true', help='Set to reduce variance in profiling reproducibility')
