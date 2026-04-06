@@ -32,7 +32,7 @@ def get_loss_fn(name: str):
         return F.cross_entropy
 
 
-def get_profiler(profile: bool = False):
+def get_profiler(profile: str = 'pytorch'):
     if profile:
         activities = [
             torch.profiler.ProfilerActivity.CPU,
