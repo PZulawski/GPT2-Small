@@ -3,7 +3,6 @@ import torch
 import yaml
 import math
 import gc
-from config_local import WANDB_API_KEY
 from time import perf_counter
 from tqdm import tqdm
 from torch.utils.data import DataLoader
