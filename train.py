@@ -1,6 +1,5 @@
 import torch
 import yaml
-import wandb
 import math
 import gc
 from config_local import WANDB_API_KEY
@@ -11,12 +10,31 @@ from argparse import ArgumentParser
 from model import Transformer
 from dataset import TextDataset
 from dataloader import PrefetchDataLoader
-from util import get_tokenizer, get_loss_fn, get_profiler, get_timestamp
+from util import get_tokenizer, get_loss_fn, get_profiler, get_logger, get_timestamp, setup, cleanup
+from torch import nn
+import torch.multiprocessing as mp
+from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+
+
 
 def main(args):
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    print(f"Running on device: {device}")
+    assert torch.cuda.is_available(), 'CUDA not found'
+    world_size = torch.cuda.device_count()
+    assert not (world_size == 1 and args.DDP), 'Attempting to run DDP on a single device'
+    print(f'Running on {world_size} devices')
 
+    # torch.compile with multi-thread and nsys don't interact well, limit to single thread compilation 
+    if args.profile == 'nsys':
+        os.environ['TORCHINDUCTOR_COMPILE_THREADS'] = '1'
+
+    mp.spawn(train, args=(world_size, args), nprocs=world_size, join=True)
+
+
+def train(rank, world_size, args):
+    setup(rank, world_size, args.DDP)
+    device = torch.device(rank)
     # load model and training run parameters
     with open('model_defaults.yaml', 'r') as config:
         config = yaml.unsafe_load(config)
@@ -32,19 +50,32 @@ def main(args):
     # init model and loss
     model = Transformer(**config[args.model]['model_config'], vocab_size=tokenizer.n_vocab).to(device)
     model.compile(fullgraph=True, mode='reduce-overhead')
+    if args.DDP:
+        nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        distributed_model =  DDP(model, device_ids=[rank])
+    else:
+        distributed_model = model
     loss_fn = torch.compile(get_loss_fn(train_config['loss']), fullgraph=True, mode='reduce-overhead')
 
     # init data loading utilities
+    assert train_config['batch_size'] % world_size == 0, 'Select effective batch size divisible by world size'
+    batch_size_per_rank = train_config['batch_size'] // world_size
     trainset = TextDataset(tokenizer, corpus_name=args.corpus_name, max_seq_len=model.max_ctx)
     validset = trainset.split_valid_from_train()
-    trainloader = DataLoader(trainset, batch_size=train_config['batch_size'], shuffle=True)
-    validloader = DataLoader(validset, batch_size=train_config['batch_size'] * 3, shuffle=False)
-    if args.prefetch_data:
+    if args.DDP:
+        print(f'Per device batch size is {batch_size_per_rank}')
+        sampler = DistributedSampler(trainset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
+        trainloader = DataLoader(trainset, batch_size_per_rank, sampler)
+    else:
+        print(f'Per device batch size is {batch_size_per_rank}')
+        trainloader = DataLoader(trainset, batch_size_per_rank, shuffle=True)
+    if args.prefetch_data and not args.DDP:
         trainloader = PrefetchDataLoader(trainloader, device)
+    validloader = DataLoader(validset, batch_size=batch_size_per_rank * 3, shuffle=False)
 
     # init optimisation utilities
     optim = torch.optim.Adam(
-        model.parameters(), 
+        distributed_model.parameters(), 
         lr=train_config['lr'], 
         betas=(train_config['beta_linear'], train_config['beta_square']),
         weight_decay=train_config['weight_decay'],
@@ -56,21 +87,14 @@ def main(args):
         wu_fraction=train_config['wu_fraction'], 
         total_steps=len(trainloader) * train_config['n_epochs'] + 1,
     )    
-
     # init logging & profiling
-    wandb.login(WANDB_API_KEY)
-    run = wandb.init(
-        name=args.run_name, 
-        project='GPT2-Small', 
-        dir=f'tmp/{args.run_name}',
-        config=train_config,
-    )
+    run = get_logger(rank, args, train_config)
     prof = get_profiler(args.profile)
 
     global_step = 0
     for e in range(train_config['n_epochs']):
         accum_loss = torch.tensor(0., device=device)
-        pbar = tqdm(trainloader)
+        pbar = tqdm(trainloader) if rank == 0 else trainloader
         with prof as prof:
             for step, (data, targets) in enumerate(pbar):
                 prof.step()
@@ -79,26 +103,39 @@ def main(args):
                     break
 
                 with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
-                    loss = train_step(model, optim, lr_scheduler, global_step, data, targets, device, loss_fn, run)
+                    loss = train_step(
+                        args,
+                        distributed_model, 
+                        optim, lr_scheduler, 
+                        global_step, 
+                        data, 
+                        targets, 
+                        device, 
+                        loss_fn, 
+                        run,
+                    )
 
                 accum_loss += loss
-                pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
+                if rank == 0:
+                    pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
 
-        if args.profile:
-            prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
-            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
-            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
+        if args.profile == 'pytorch':
+            if rank == 0:
+                prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
+                print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
+                print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
             break
 
-        valid_loss = validate(model, loss_fn, validloader)
+        valid_loss = validate(rank, model, loss_fn, validloader)
         run.log({'valid_loss': valid_loss}, step=global_step)
         print(f'For epoch {e} valid loss was {valid_loss:.2f}')
     
+    cleanup(args.DDP)
     run.finish()
-    return model
+    return distributed_model    
 
 
-def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
+def train_step(args, model, optim, lr_scheduler, step, data, targets, device, loss_fn, run):
     """Executes a single training step, records and logs telemetry to W&B"""
     
     start_time_step = perf_counter()
@@ -138,9 +175,9 @@ def train_step(model, optim, lr_scheduler, step, data, targets, device, loss_fn,
     
 
 @torch.inference_mode()
-def validate(model, loss_fn, validloader: DataLoader):
+def validate(rank, model, loss_fn, validloader: DataLoader):
     device = next(model.parameters()).device
-    pbar = tqdm(validloader)
+    pbar = tqdm(validloader) if rank == 0 else validloader
     total_loss = 0
     for i, (data, targets) in enumerate(pbar):
         data, targets = data.to(device), targets.to(device)
@@ -198,6 +235,7 @@ def parse_args(args: list[str] = None):
     parser.add_argument('--run_name', type=str, help='Name of the run for W&B logging')
     parser.add_argument('--fixed_seed', action='store_true', help='Set to reduce variance in profiling reproducibility')
     parser.add_argument('--log_acts_and_grads', action='store_true', help='Set to log activation and grad max to W&B')
+    parser.add_argument('--DDP', action='store_true', help='Set to run Distribute Data Parallel')
 
     args = parser.parse_args(args)
     return args
