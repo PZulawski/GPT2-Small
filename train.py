@@ -61,7 +61,7 @@ def train(rank, world_size, args):
     assert train_config['batch_size'] % world_size == 0, 'Select effective batch size divisible by world size'
     batch_size_per_rank = train_config['batch_size'] // world_size
     trainset = TextDataset(tokenizer, corpus_name=args.corpus_name, max_seq_len=model.max_ctx)
-    validset = trainset.split_valid_from_train()
+    validset = trainset.split_valid_from_train(fraction=args.valid_fraction)
     if args.DDP:
         print(f'Per device batch size is {batch_size_per_rank}')
         sampler = DistributedSampler(trainset, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
@@ -229,6 +229,7 @@ def parse_args(args: list[str] = None):
         default='shakespear_tiny', 
         help='Name of training corpus',
     )
+    parser.add_argument('--valid_fraction', type=float, default=0.001, help='Fraction of data set used for validation')
     parser.add_argument('--prefetch_data', action='store_true')
     parser.add_argument(
         '--profile', 
