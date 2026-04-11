@@ -119,17 +119,21 @@ def train(rank, world_size, args):
                 if rank == 0:
                     pbar.set_postfix({'epoch': e, 'loss': accum_loss / step})
 
+                if global_step % 1000 == 0:
+                    valid_loss = validate(rank, model, loss_fn, validloader)
+                    run.log({'valid_loss': valid_loss}, step=global_step)
+                    print(f'At step {global_step} valid loss was {valid_loss:.2f}')
+                    save_model_checkpoint(rank, model, optim, global_step, valid_loss, args.run_name)
+            
+
         if args.profile == 'pytorch':
             if rank == 0:
                 prof.export_chrome_trace(f'tmp/train_trace_{get_timestamp()}.json')
                 print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=30))
                 print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=30))
             break
-
-        valid_loss = validate(rank, model, loss_fn, validloader)
-        run.log({'valid_loss': valid_loss}, step=global_step)
-        print(f'For epoch {e} valid loss was {valid_loss:.2f}')
     
+    save_model_checkpoint(rank, model, optim, global_step, valid_loss, args.run_name)
     cleanup(args.DDP)
     run.finish()
     return distributed_model    
@@ -172,6 +176,21 @@ def train_step(args, model, optim, lr_scheduler, step, data, targets, device, lo
     optim.zero_grad()
 
     return loss
+
+
+def save_model_checkpoint(rank, model, optim, global_step, valid_loss, run_name):
+    if rank == 0:
+        chkpt_dir = f'chkpts/{run_name}'
+        os.makedirs(chkpt_dir, exist_ok=True)
+        torch.save(
+            {                                                                                                                                                                                                               
+                'step': global_step,                                            
+                'model_state_dict': model.state_dict(),
+                'optim_state_dict': optim.state_dict(),                                                                                                                                                                                
+                'valid_loss': valid_loss,
+            }, 
+            f=f"{chkpt_dir}/checkpoint_step_{global_step}.pt",
+        ) 
     
 
 @torch.inference_mode()
