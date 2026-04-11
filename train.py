@@ -74,7 +74,7 @@ def train(rank, world_size, args):
     validloader = DataLoader(validset, batch_size=batch_size_per_rank * 3, shuffle=False)
 
     # init optimisation utilities
-    optim = torch.optim.Adam(
+    optim = torch.optim.AdamW(
         distributed_model.parameters(), 
         lr=train_config['lr'], 
         betas=(train_config['beta_linear'], train_config['beta_square']),
