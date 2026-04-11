@@ -23,6 +23,7 @@ class Transformer(nn.Module):
             for _ in range(self.n_layers)
         )
         self.vocab_project = nn.Linear(self.d_attention, self.vocab_size)
+        self.unembed_layern_norm = nn.LayerNorm(d_attention)
         
         causal_mask = torch.triu(torch.zeros((self.max_ctx, self.max_ctx)) - torch.inf, diagonal=1)
         causal_mask = torch.stack(
@@ -52,6 +53,8 @@ class Transformer(nn.Module):
         for transformer_block in self.blocks:
             x = transformer_block(x, self.causal_mask, self.is_inference)
         assert x.shape == (bs, seq_len, self.d_attention)
+
+        x = self.unembed_layern_norm(x)
         
         # project final embeddings to comput logits over full vocab
         logits = self.vocab_project(x)
