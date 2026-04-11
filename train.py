@@ -160,6 +160,7 @@ def train_step(args, model, optim, lr_scheduler, step, data, targets, device, lo
     run.log({'model_backward_time': perf_counter() - start_time}, step=step)
 
     start_time = perf_counter()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
     optim.step()
     lr_scheduler.step()
     run.log(
