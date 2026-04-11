@@ -245,7 +245,7 @@ def parse_args(args: list[str] = None):
     parser.add_argument(
         '--corpus_name', 
         type=str, 
-        choices=['shakespear_tiny'],
+        choices=['shakespear_tiny', 'wikitext-103'],
         default='shakespear_tiny', 
         help='Name of training corpus',
     )
