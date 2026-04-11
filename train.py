@@ -71,7 +71,7 @@ def train(rank, world_size, args):
         trainloader = DataLoader(trainset, batch_size_per_rank, shuffle=True)
     if args.prefetch_data and not args.DDP:
         trainloader = PrefetchDataLoader(trainloader, device)
-    validloader = DataLoader(validset, batch_size=batch_size_per_rank * 3, shuffle=False)
+    validloader = DataLoader(validset, batch_size=batch_size_per_rank, shuffle=False)
 
     # init optimisation utilities
     optim = torch.optim.AdamW(
