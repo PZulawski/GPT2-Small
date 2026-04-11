@@ -52,7 +52,7 @@ def train(rank, world_size, args):
     model.compile(fullgraph=True, mode='reduce-overhead')
     if args.DDP:
         nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        distributed_model =  DDP(model, device_ids=[rank])
+        distributed_model =  DDP(model, device_ids=[rank], bucket_cap_mb=100)
     else:
         distributed_model = model
     loss_fn = torch.compile(get_loss_fn(train_config['loss']), fullgraph=True, mode='reduce-overhead')
